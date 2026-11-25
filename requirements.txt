@@ -1,0 +1,7 @@
+# HVAC Lead-Intake Demo - tested with Python 3.13
+pydantic-ai-slim[anthropic]==2.74.0
+anthropic==2.14.0
+pydantic==2.13.5
+python-dotenv
+pytest
+# Promptfoo (Node 20+): npm install -g promptfoo  (tested with 0.126.0) or use npx

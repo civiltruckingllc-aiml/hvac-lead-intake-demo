@@ -1,0 +1,111 @@
+# HVAC lead intake: extraction + follow-up draft.
+# Mock mode (default, free):   npx promptfoo eval
+# Live mode (paid API calls):  LEAD_DEMO_MODE=live npx promptfoo eval
+description: HVAC lead intake (Pydantic AI extraction + Claude follow-up draft)
+
+prompts:
+  - "{{inquiry}}"
+
+providers:
+  - id: file://promptfoo/provider.py
+    label: lead-pipeline
+
+defaultTest:
+  assert:
+    - type: is-json
+    - type: javascript
+      metric: outbound_disabled
+      value: |
+        const r = JSON.parse(output);
+        return r.follow_up.outbound_sent === false &&
+          ['pending_contractor_review', 'not_drafted'].includes(r.follow_up.status);
+    - type: javascript
+      metric: callback_wording_preserved
+      value: |
+        const pref = JSON.parse(output).lead.callback_preference;
+        return pref === null || context.vars.inquiry.includes(pref);
+
+tests:
+  - description: Complete inquiry
+    vars:
+      inquiry: file://data/inquiries/complete.txt
+    assert:
+      - type: javascript
+        metric: fields_extracted
+        value: |
+          const l = JSON.parse(output).lead;
+          return l.customer_name === 'Denise Carter' &&
+            l.phone === '(205) 555-0147' &&
+            l.email === 'denise.carter@example.com' &&
+            l.service_address === '1412 Oak Hollow Lane, Hoover, AL 35226' &&
+            l.service_type === 'repair' &&
+            l.system_type === 'central_ac' &&
+            l.declined_follow_up === false;
+      - type: javascript
+        metric: callback_exact
+        value: |
+          return JSON.parse(output).lead.callback_preference ===
+            'Best time to reach me is after 5:30 pm on weekdays, please text first before calling.';
+      - type: javascript
+        metric: draft_ready_for_review
+        value: |
+          const f = JSON.parse(output).follow_up;
+          return f.status === 'pending_contractor_review' && f.channel === 'sms' &&
+            f.body.includes('Denise') && !f.body.includes('$');
+
+  - description: Missing phone number
+    vars:
+      inquiry: file://data/inquiries/missing_phone.txt
+    assert:
+      - type: javascript
+        metric: unknown_left_empty
+        value: |
+          const l = JSON.parse(output).lead;
+          return l.phone === null && l.email === 'mbell.home@example.net' && l.urgency === null;
+      - type: javascript
+        metric: callback_exact
+        value: |
+          return JSON.parse(output).lead.callback_preference ===
+            "You can email me at mbell.home@example.net, I don't really answer calls from numbers I don't know.";
+      - type: javascript
+        metric: draft_uses_email_and_flags_phone
+        value: |
+          const f = JSON.parse(output).follow_up;
+          return f.status === 'pending_contractor_review' && f.channel === 'email' &&
+            f.review_flags.includes('missing_phone');
+
+  - description: Ambiguous service request
+    vars:
+      inquiry: file://data/inquiries/ambiguous_service.txt
+    assert:
+      - type: javascript
+        metric: service_not_guessed
+        value: |
+          const l = JSON.parse(output).lead;
+          return l.service_type === null &&
+            l.service_type_candidates.includes('repair') &&
+            l.service_type_candidates.includes('replacement') &&
+            l.system_type === null && l.service_address === null && l.email === null;
+      - type: javascript
+        metric: draft_asks_to_clarify
+        value: |
+          const f = JSON.parse(output).follow_up;
+          return f.status === 'pending_contractor_review' &&
+            f.review_flags.includes('ambiguous_service_type') && f.body.includes('?');
+
+  - description: Customer declines follow-up
+    vars:
+      inquiry: file://data/inquiries/declined_follow_up.txt
+    assert:
+      - type: javascript
+        metric: decline_detected
+        value: |
+          const l = JSON.parse(output).lead;
+          return l.declined_follow_up === true &&
+            l.callback_preference.includes("please don't call or email me");
+      - type: javascript
+        metric: no_draft_created
+        value: |
+          const f = JSON.parse(output).follow_up;
+          return f.status === 'not_drafted' && f.body === null &&
+            f.review_flags.includes('customer_declined_follow_up');
